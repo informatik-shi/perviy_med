@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type TrackKey = "onsite" | "distance";
+type Role = "student" | "admin";
+type Student = { name: string; id: string; country: string; track: TrackKey; login?: string; password?: string; progress?: Array<{ track: TrackKey; step_index: number; completed: number | boolean }> };
+type AuthUser = { id: number; login: string; role: Role; name: string; country: string | null; studentId: string | null; track: TrackKey | null };
 
 type Step = {
   title: string;
@@ -53,12 +56,66 @@ const schedule = [
   ["07 авг", "Приказ · 100% мест", "done"],
 ];
 
+const initialStudents: Student[] = [
+  { name: "Амира Нур", id: "SPB-24018", country: "Египет", track: "onsite" },
+  { name: "Мигель Сантос", id: "SPB-24012", country: "Бразилия", track: "onsite" },
+  { name: "Ирина Даниленко", id: "SPB-24007", country: "Узбекистан", track: "onsite" },
+];
+
+const demoAdminProgress: Record<string, boolean[]> = {
+  "Мигель Сантос": [true, true, true, false, false, false, false],
+  "Ирина Даниленко": [true, false, false, false, false, false, false],
+};
+
 function initials(name: string) {
   return name.split(" ").map((part) => part[0]).join("").slice(0, 2);
 }
 
+function LoginScreen({ onLogin, error, busy }: { onLogin: (login: string, password: string) => Promise<void>; error: string; busy: boolean }) {
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
+  return <main className="login-page"><div className="login-aside"><div className="brand-lockup"><div className="brand-mark">П</div><div><strong>ПСПбГМУ</strong><span>Подготовительное отделение</span></div></div><div className="login-aside-copy"><span className="eyebrow">ЛИЧНЫЙ КАБИНЕТ · 2026</span><h1>Ваш маршрут<br />к зачислению.</h1><p>Единое пространство для студентов и приёмной комиссии.</p><div className="login-aside-line"><span>01</span><span>Отмечайте этапы</span><span>02</span><span>Следите за статусом</span></div></div></div><div className="login-main"><div className="login-card"><span className="eyebrow">ВХОД В СИСТЕМУ</span><h2>Добро пожаловать</h2><p className="login-lead">Введите логин и пароль, чтобы продолжить.</p><form onSubmit={(event) => { event.preventDefault(); void onLogin(login, password); }}><label className="login-label">Логин<input autoComplete="username" value={login} onChange={(event) => setLogin(event.target.value)} placeholder="Введите логин" required /></label><label className="login-label">Пароль<input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Введите пароль" required /></label>{error && <div className="login-error">{error}</div>}<button className="primary-button login-submit" disabled={busy}>{busy ? "Проверяем…" : "Войти"}<span>→</span></button></form><div className="login-security"><span>⌁</span><p>Доступ защищён сессионной cookie.<br />Регистрацию студентов выполняет администратор.</p></div></div></div></main>;
+}
+
+function AdminDashboard({ track, completed, students, onTrackChange, onExport, onRegister }: { track: TrackKey; completed: Record<TrackKey, boolean[]>; students: Student[]; onTrackChange: (track: TrackKey) => void; onExport: () => void; onRegister: (student: Student) => void }) {
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [form, setForm] = useState({ name: "", id: "", country: "", login: "", password: "", track });
+  const steps = tracks[track].steps;
+  const rows = students.filter((student) => student.track === track).map((student) => ({
+    ...student,
+    statuses: student.progress ? steps.map((_, index) => Boolean(student.progress?.some((item) => item.track === track && item.step_index === index && Boolean(item.completed)))) : student.name === "Амира Нур" ? completed[track] : demoAdminProgress[student.name] || steps.map(() => false),
+  }));
+  const totalDone = rows.reduce((sum, row) => sum + row.statuses.filter(Boolean).length, 0);
+  const totalSteps = rows.length * steps.length;
+  const reviewCount = rows.filter((row) => row.statuses[2]).length;
+
+  return (
+    <div className="admin-content">
+      <section className="admin-hero">
+        <div><p className="kicker">Панель приёмной комиссии · 2026</p><h1>Контроль маршрутов</h1><p className="hero-copy">Следите, какие этапы уже прошли студенты. Изменения из личного кабинета появляются здесь автоматически.</p></div>
+        <div className="admin-actions"><button className="outline-button" onClick={() => { setForm({ name: "", id: "", country: "", login: "", password: "", track }); setRegisterOpen(true); }}><span>＋</span> Зарегистрировать студента</button><button className="primary-button export-button" onClick={onExport}><span>⇩</span> Скачать для Excel</button></div>
+      </section>
+
+      <div className="admin-toolbar"><div className="admin-track-tabs"><button className={track === "onsite" ? "selected" : ""} onClick={() => onTrackChange("onsite")}>Очный трек</button><button className={track === "distance" ? "selected" : ""} onClick={() => onTrackChange("distance")}>Дистанционный трек</button></div><span className="sync-status"><i /> Синхронизировано с личными кабинетами</span></div>
+
+      <section className="admin-summary-grid"><div className="admin-stat panel"><span className="eyebrow">СТУДЕНТЫ В ТРЕКЕ</span><strong>{rows.length}</strong><small>активных профиля</small></div><div className="admin-stat panel"><span className="eyebrow">ВЫПОЛНЕНО</span><strong>{totalDone}<em>/{totalSteps}</em></strong><small>этапов отмечено</small></div><div className="admin-stat panel"><span className="eyebrow">НА ПРОВЕРКЕ</span><strong>{reviewCount}</strong><small>студента дошли до проверки</small></div><div className="admin-stat accent panel"><span className="eyebrow">ПОСЛЕДНЕЕ ОБНОВЛЕНИЕ</span><strong>сейчас</strong><small>данные из прототипа</small></div></section>
+
+      <section className="admin-table-card panel"><div className="section-heading compact"><div><span className="eyebrow">ТАБЛИЦА ПРОГРЕССА</span><h2>Статусы студентов</h2></div><span className="table-note"><i /> Галочка = этап пройден</span></div><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Студент</th><th>Формат</th>{steps.map((step, index) => <th key={step.title} title={step.title}>Шаг {index + 1}</th>)}<th>Прогресс</th><th>Статус</th></tr></thead><tbody>{rows.map((row) => { const done = row.statuses.filter(Boolean).length; const percent = Math.round(done / steps.length * 100); const next = row.statuses.findIndex((item) => !item); return <tr key={row.id}><td><div className="student-cell"><div className="avatar table-avatar">{initials(row.name)}</div><div><strong>{row.name}</strong><small>{row.id} · {row.country}</small></div></div></td><td><span className="format-cell">{track === "onsite" ? "Очный" : "Дистанционный"}</span></td>{row.statuses.map((status, index) => <td key={`${row.id}-${index}`}><span className={`table-check ${status ? "checked" : ""}`}>{status ? "✓" : "—"}</span></td>)}<td><div className="table-progress"><div><span style={{ width: `${percent}%` }} /></div><strong>{percent}%</strong></div></td><td><span className={`row-status ${next === -1 ? "complete" : next === 2 ? "review" : "in-progress"}`}>{next === -1 ? "Готов" : next === 2 ? "Проверка" : "В работе"}</span></td></tr>; })}</tbody></table></div><div className="admin-table-footer"><span>Нажмите «Скачать для Excel», чтобы открыть сводку в Excel</span><span>{rows.length} студента · {steps.length} этапов</span></div></section>
+
+      <section className="admin-info"><div className="notice-icon">i</div><div><strong>Доступ разделён по ролям</strong><p>Студент видит только свой личный профиль. Регистрацию и просмотр сводной таблицы выполняет администратор; в реальном проекте доступ защищается учётной записью и сервером.</p></div></section>
+      {registerOpen && <div className="modal-backdrop" role="presentation" onClick={() => setRegisterOpen(false)}><div className="guide-modal register-modal" role="dialog" aria-modal="true" aria-labelledby="register-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setRegisterOpen(false)} aria-label="Закрыть">×</button><span className="eyebrow">ТОЛЬКО ДЛЯ АДМИНИСТРАТОРА</span><h2 id="register-title">Регистрация студента</h2><p>Создайте личный профиль, после чего студент сможет войти и отмечать свои этапы.</p><div className="register-form"><label>ФИО<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Например, Амира Нур" /></label><label>ID абитуриента<input value={form.id} onChange={(event) => setForm({ ...form, id: event.target.value })} placeholder="SPB-24021" /></label><label>Страна<input value={form.country} onChange={(event) => setForm({ ...form, country: event.target.value })} placeholder="Египет" /></label><label>Логин студента<input value={form.login} onChange={(event) => setForm({ ...form, login: event.target.value })} placeholder="amira.nur" /></label><label>Временный пароль<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Задайте пароль" /></label><label>Формат<select value={form.track} onChange={(event) => setForm({ ...form, track: event.target.value as TrackKey })}><option value="onsite">Очный · с въездом в РФ</option><option value="distance">Дистанционный</option></select></label></div><button className="primary-button" disabled={!form.name || !form.id || !form.country || !form.login || !form.password} onClick={() => { onRegister(form); setRegisterOpen(false); }}>Создать личный профиль</button></div></div>}
+    </div>
+  );
+}
+
 export default function Home() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const role: Role = authUser?.role ?? "student";
   const [track, setTrack] = useState<TrackKey>("onsite");
+  const [students, setStudents] = useState<Student[]>(initialStudents);
   const [completed, setCompleted] = useState<Record<TrackKey, boolean[]>>({
     onsite: [true, true, false, false, false, false, false],
     distance: [true, false, false, false, false],
@@ -67,15 +124,59 @@ export default function Home() {
   const [toast, setToast] = useState("");
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("spbgmu-route-progress");
-    if (stored) {
-      try { setCompleted(JSON.parse(stored)); } catch { /* use the sample progress */ }
-    }
+    fetch("/api/auth/me", { credentials: "include" }).then(async (response) => {
+      if (response.ok) {
+        const payload = await response.json() as { user: AuthUser };
+        setAuthUser(payload.user);
+        if (payload.user.track) setTrack(payload.user.track);
+      }
+    }).catch(() => setAuthError("Сервер авторизации недоступен")).finally(() => setAuthChecked(true));
   }, []);
 
+  async function handleLogin(login: string, password: string) {
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ login, password }) });
+      const payload = await response.json() as { user?: AuthUser; error?: string };
+      if (!response.ok || !payload.user) throw new Error(payload.error || "Не удалось войти");
+      setAuthUser(payload.user);
+      if (payload.user.track) setTrack(payload.user.track);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Не удалось войти");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    setAuthUser(null);
+    setAuthError("");
+  }
+
   useEffect(() => {
-    window.localStorage.setItem("spbgmu-route-progress", JSON.stringify(completed));
-  }, [completed]);
+    if (!authUser || authUser.role !== "student") return;
+    fetch(`/api/progress?track=${track}`, { credentials: "include" }).then(async (response) => {
+      if (!response.ok) return;
+      const payload = await response.json() as { progress: Array<{ step_index: number; completed: number }> };
+      const next = { onsite: tracks.onsite.steps.map(() => false), distance: tracks.distance.steps.map(() => false) };
+      for (const row of payload.progress) if (row.step_index < next[track].length) next[track][row.step_index] = Boolean(row.completed);
+      setCompleted(next);
+    }).catch(() => setToast("Не удалось загрузить прогресс"));
+  }, [authUser, track]);
+
+  useEffect(() => {
+    if (!authUser || authUser.role !== "admin") return;
+    fetch(`/api/students?track=${track}`, { credentials: "include" }).then(async (response) => {
+      if (!response.ok) return;
+      const payload = await response.json() as { students: Array<{ id: number; login: string; full_name: string; country: string; student_id: string; track: TrackKey; progress: Array<{ track: TrackKey; step_index: number; completed: number }> }> };
+      setStudents(payload.students.map((student) => ({ name: student.full_name, id: student.student_id, country: student.country, track: student.track, login: student.login, progress: student.progress })));
+    }).catch(() => setToast("Не удалось загрузить студентов"));
+  }, [authUser, track]);
+
+  if (!authChecked) return <main className="login-page login-loading"><div className="login-spinner" /><span>Проверяем сессию…</span></main>;
+  if (!authUser) return <LoginScreen onLogin={handleLogin} error={authError} busy={authBusy} />;
 
   const activeTrack = tracks[track];
   const activeCompleted = completed[track];
@@ -83,20 +184,46 @@ export default function Home() {
   const progress = Math.round((completedCount / activeTrack.steps.length) * 100);
   const nextIndex = activeCompleted.findIndex((item) => !item);
 
-  const currentStatus = useMemo(() => {
-    if (nextIndex === -1) return "Маршрут завершён";
-    if (nextIndex === 2) return "Проверка документов";
-    return "В работе";
-  }, [nextIndex]);
+  const currentStatus = nextIndex === -1 ? "Маршрут завершён" : nextIndex === 2 ? "Проверка документов" : "В работе";
 
   function toggleStep(index: number) {
+    const nextValue = !activeCompleted[index];
     setCompleted((current) => {
       const next = { ...current, [track]: [...current[track]] };
-      next[track][index] = !next[track][index];
+      next[track][index] = nextValue;
       return next;
     });
+    void fetch("/api/progress", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ track, stepIndex: index, completed: nextValue }) }).then((response) => { if (!response.ok) setToast("Не удалось сохранить этап"); });
     setToast(activeCompleted[index] ? "Этап снова отмечен как незавершённый" : "Этап отмечен как пройденный");
     window.setTimeout(() => setToast(""), 2200);
+  }
+
+  function downloadCsv() {
+    const steps = tracks[track].steps;
+    const headers = ["Студент", "ID", "Страна", "Формат", ...steps.map((step, index) => `Шаг ${index + 1}: ${step.title}`), "Прогресс"];
+    const rows = students.filter((student) => student.track === track).map((student) => {
+      const statuses = student.progress ? steps.map((_, index) => Boolean(student.progress?.some((item) => item.track === track && item.step_index === index && Boolean(item.completed)))) : steps.map(() => false);
+      return [student.name, student.id, student.country, track === "onsite" ? "Очный" : "Дистанционный", ...statuses.map((status) => status ? "Пройден" : "Не пройден"), `${Math.round(statuses.filter(Boolean).length / steps.length * 100)}%`];
+    });
+    const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(";")).join("\r\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `progress-${track}-2026.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setToast("Excel-таблица подготовлена к скачиванию");
+    window.setTimeout(() => setToast(""), 2600);
+  }
+
+  async function registerStudent(student: Student) {
+    const response = await fetch("/api/students", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ name: student.name, studentId: student.id, country: student.country, track: student.track, login: student.login, password: student.password }) });
+    const payload = await response.json() as { id?: number; error?: string };
+    if (!response.ok) { setToast(payload.error || "Не удалось зарегистрировать студента"); window.setTimeout(() => setToast(""), 2600); return; }
+    setStudents((current) => [...current, student]);
+    setToast(`Профиль ${student.name} зарегистрирован`);
+    window.setTimeout(() => setToast(""), 2600);
   }
 
   return (
@@ -123,10 +250,10 @@ export default function Home() {
       <section className="workspace">
         <header className="topbar">
           <div className="breadcrumbs"><span>ПОДГОТОВИТЕЛЬНОЕ ОТДЕЛЕНИЕ</span><b>/</b><strong>МОЙ МАРШРУТ</strong></div>
-          <div className="top-actions"><button className="icon-button" aria-label="Уведомления">♧<span className="alert-dot" /></button><div className="top-profile"><div className="avatar">АН</div><div><strong>Амира Нур</strong><span>Изменить профиль</span></div><span className="chevron">⌄</span></div></div>
+          <div className="top-actions"><span className="role-badge">{role === "admin" ? "Администратор" : "Личный кабинет"}</span><button className="icon-button" aria-label="Уведомления">♧<span className="alert-dot" /></button><div className="top-profile"><div className="avatar">{role === "admin" ? "ПК" : initials(authUser.name)}</div><div><strong>{authUser.name}</strong><span>{authUser.login}</span></div><button className="logout-button" onClick={() => void handleLogout()}>Выйти</button></div></div>
         </header>
 
-        <div className="content">
+        {role === "student" ? <div className="content">
           <section className="hero-row">
             <div><p className="kicker">Путь абитуриента · 2026</p><h1>Маршрут к зачислению</h1><p className="hero-copy">От регистрации до первого дня в университете — отмечайте этапы, чтобы ничего не пропустить.</p></div>
             <button className="outline-button" onClick={() => setGuideOpen(true)}><span>↗</span> Открыть инструкцию</button>
@@ -154,7 +281,7 @@ export default function Home() {
               <section className="contact-card panel"><div className="contact-avatar">МВ</div><div><span className="eyebrow">ПРИЁМНАЯ КОМИССИЯ</span><h3>Мария Кривенцова</h3><p>Ответственный секретарь</p><a href="mailto:prepspbgmu@yandex.ru">prepspbgmu@yandex.ru</a><a href="tel:+79312378086">+7 931 237-80-86 · WhatsApp</a></div></section>
             </aside>
           </div>
-        </div>
+        </div> : <AdminDashboard track={track} completed={completed} students={students} onTrackChange={setTrack} onExport={downloadCsv} onRegister={registerStudent} />}
       </section>
 
       {guideOpen && <div className="modal-backdrop" role="presentation" onClick={() => setGuideOpen(false)}><div className="guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setGuideOpen(false)} aria-label="Закрыть">×</button><span className="eyebrow">КОРОТКАЯ ИНСТРУКЦИЯ</span><h2 id="guide-title">Как пройти маршрут</h2><p>Сначала создайте личный кабинет и загрузите обязательные документы. После проверки приёмной комиссией сформируйте заявления, подпишите их и верните сканы через сообщения кабинета.</p><div className="guide-list"><div><b>01</b><span>Загрузите только читаемые PDF-сканы</span></div><div><b>02</b><span>Следите за сообщениями приёмной комиссии</span></div><div><b>03</b><span>Отмечайте каждый пройденный этап в этом кабинете</span></div></div><button className="primary-button" onClick={() => setGuideOpen(false)}>Понятно, продолжить</button></div></div>}

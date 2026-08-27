@@ -98,3 +98,15 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
 - [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+# Личный кабинет ПСПбГМУ
+
+## Запуск production-связки локально
+
+1. Установите и запустите Docker Desktop.
+2. Скопируйте `.env.example` в `.env` и задайте секреты MySQL и администратора.
+3. Выполните `docker-compose -p spbgmu up --build`.
+4. Откройте `http://localhost:3000`.
+
+Сервисы: MySQL 8.4 (`mysql`), Node API (`api:4000`) и web через Nginx gateway (`:3000`). В production TLS должен завершаться на внешнем reverse-proxy/load-balancer; для HTTPS установите `COOKIE_SECURE=true`.
+
+Регистрация студентов и просмотр сводной таблицы доступны только роли `admin`. Студент получает отдельный логин, пароль и видит только собственный прогресс.
