@@ -41,8 +41,9 @@ async function initDatabase() {
   try { await pool.query("ALTER TABLE users MODIFY role ENUM('admin','viewer','student') NOT NULL"); } catch (error) { console.error("role migration", error.message); }
   await ensureColumn("users", "email", "VARCHAR(190) NULL");
   await pool.query(`CREATE TABLE IF NOT EXISTS sessions (token CHAR(64) PRIMARY KEY, user_id BIGINT UNSIGNED NOT NULL, expires_at DATETIME NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_sessions_user (user_id), CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS progress (user_id BIGINT UNSIGNED NOT NULL, track ENUM('onsite','distance') NOT NULL, step_index TINYINT UNSIGNED NOT NULL, completed BOOLEAN NOT NULL DEFAULT FALSE, answer TEXT NULL, student_date DATE NULL, admin_date DATE NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, PRIMARY KEY (user_id, track, step_index), CONSTRAINT fk_progress_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS progress (user_id BIGINT UNSIGNED NOT NULL, track ENUM('onsite','distance') NOT NULL, step_index TINYINT UNSIGNED NOT NULL, completed BOOLEAN NOT NULL DEFAULT FALSE, admin_completed BOOLEAN NOT NULL DEFAULT FALSE, answer TEXT NULL, student_date DATE NULL, admin_date DATE NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, PRIMARY KEY (user_id, track, step_index), CONSTRAINT fk_progress_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
   await ensureColumn("progress", "answer", "TEXT NULL");
+  await ensureColumn("progress", "admin_completed", "BOOLEAN NOT NULL DEFAULT FALSE");
   await ensureColumn("progress", "student_date", "DATE NULL");
   await ensureColumn("progress", "admin_date", "DATE NULL");
   await pool.query(`CREATE TABLE IF NOT EXISTS profiles (user_id BIGINT UNSIGNED PRIMARY KEY, data JSON NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, CONSTRAINT fk_profiles_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
@@ -127,7 +128,7 @@ async function route(request, response) {
         const [students] = await pool.execute("SELECT id, login, full_name, email, country, student_id, track, created_at FROM users WHERE role = 'student' AND (? IS NULL OR track = ?) ORDER BY created_at DESC", [track, track]);
         const result = [];
         for (const student of students) {
-          const [progress] = await pool.execute("SELECT track, step_index, completed, answer, student_date, admin_date, updated_at FROM progress WHERE user_id = ? ORDER BY track, step_index", [student.id]);
+          const [progress] = await pool.execute("SELECT track, step_index, completed, admin_completed, answer, student_date, admin_date, updated_at FROM progress WHERE user_id = ? ORDER BY track, step_index", [student.id]);
           const [profiles] = await pool.execute("SELECT data FROM profiles WHERE user_id = ?", [student.id]);
           result.push({ ...student, profile: profiles[0]?.data || {}, progress });
         }
@@ -164,7 +165,7 @@ async function route(request, response) {
       const targetId = user.role === "student" ? user.id : Number(url.searchParams.get("userId") || 0);
       if (!targetId) return sendJson(response, 400, { error: "Не указан студент" });
       const track = url.searchParams.get("track") || user.track || "onsite";
-      const [rows] = await pool.execute("SELECT step_index, completed, answer, student_date, admin_date, updated_at FROM progress WHERE user_id = ? AND track = ? ORDER BY step_index", [targetId, track]);
+      const [rows] = await pool.execute("SELECT step_index, completed, admin_completed, answer, student_date, admin_date, updated_at FROM progress WHERE user_id = ? AND track = ? ORDER BY step_index", [targetId, track]);
       return sendJson(response, 200, { track, progress: rows });
     }
     if (request.method === "POST" && url.pathname === "/api/progress") {
@@ -175,13 +176,14 @@ async function route(request, response) {
       const stepIndex = Number(payload.stepIndex);
       if (!Number.isInteger(stepIndex) || stepIndex < 0 || stepIndex > 30) return sendJson(response, 400, { error: "Некорректный этап" });
       const completed = payload.completed ? 1 : 0;
+      const adminCompleted = payload.adminCompleted ? 1 : 0;
       const answer = user.role === "student" ? (payload.answer == null ? null : String(payload.answer)) : undefined;
       const studentDate = user.role === "student" ? cleanDate(payload.studentDate) : undefined;
       const adminDate = user.role === "admin" ? cleanDate(payload.adminDate) : undefined;
       if (user.role === "student") {
         await pool.execute("INSERT INTO progress (user_id, track, step_index, completed, answer, student_date) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE completed = VALUES(completed), answer = VALUES(answer), student_date = VALUES(student_date), updated_at = CURRENT_TIMESTAMP", [targetId, track, stepIndex, completed, answer, studentDate]);
       } else {
-        await pool.execute("INSERT INTO progress (user_id, track, step_index, completed, admin_date) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE completed = VALUES(completed), admin_date = VALUES(admin_date), updated_at = CURRENT_TIMESTAMP", [targetId, track, stepIndex, completed, adminDate]);
+        await pool.execute("INSERT INTO progress (user_id, track, step_index, admin_completed, admin_date) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE admin_completed = VALUES(admin_completed), admin_date = VALUES(admin_date), updated_at = CURRENT_TIMESTAMP", [targetId, track, stepIndex, adminCompleted, adminDate]);
       }
       return sendJson(response, 200, { ok: true });
     }
