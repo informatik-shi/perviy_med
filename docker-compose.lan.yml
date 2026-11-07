@@ -1,0 +1,6 @@
+# Add Wi-Fi access while retaining the localhost port from docker-compose.yml.
+# Set LAN_IP to this computer's Wi-Fi IPv4 address before starting Compose.
+services:
+  gateway:
+    ports:
+      - "${LAN_IP:?Set LAN_IP to the computer Wi-Fi address}:${GATEWAY_PORT:-3000}:80"

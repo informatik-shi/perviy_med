@@ -2,6 +2,12 @@ import http from "node:http";
 import { promisify } from "node:util";
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import mysql from "mysql2/promise";
+import { initPaymentDocuments, handlePaymentDocuments } from "./payment-documents.mjs";
+import { initMigrationDocuments, handleMigrationDocuments } from "./migration-documents.mjs";
+import { initServicesDocuments, handleServicesDocuments } from "./services-documents.mjs";
+import { initMedicalDocuments, handleMedicalDocuments } from "./medical-documents.mjs";
+import { createNotificationMailer, initMessageNotifications, startNotificationWorker, validEmail } from "./mail-notifications.mjs";
+import { handleMessages } from "./messages.mjs";
 
 const scrypt = promisify(scryptCallback);
 const port = Number(process.env.API_PORT || 4000);
@@ -16,6 +22,7 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   charset: "utf8mb4",
 });
+const notificationMailer = createNotificationMailer();
 
 async function hashPassword(value) {
   const salt = randomBytes(16);
@@ -120,6 +127,11 @@ async function route(request, response) {
 
     const user = await currentUser(request);
     if (!user) return authError(response);
+    if (await handlePaymentDocuments(request, response, url, user, pool)) return;
+    if (await handleMigrationDocuments(request, response, url, user, pool)) return;
+    if (await handleServicesDocuments(request, response, url, user, pool)) return;
+    if (await handleMedicalDocuments(request, response, url, user, pool)) return;
+    if (await handleMessages(request, response, url, user, pool, { readBody: body, mailer: notificationMailer })) return;
 
     if (url.pathname === "/api/students") {
       if (!roleAllowed(user, ["admin", "viewer"])) return authError(response, 403);
@@ -143,6 +155,7 @@ async function route(request, response) {
         const studentId = String(payload.studentId || "").trim();
         const country = String(payload.country || "").trim();
         const email = String(payload.email || "").trim() || null;
+        if (email && !validEmail(email)) return sendJson(response, 400, { error: "Укажите корректный email" });
         const selectedTrack = payload.track === "distance" ? "distance" : "onsite";
         if (!login || !password || !name || !studentId || !country) return sendJson(response, 400, { error: "Заполните ФИО, ID, страну, логин и пароль" });
         const [result] = await pool.execute("INSERT INTO users (login, password_hash, role, full_name, email, country, student_id, track) VALUES (?, ?, 'student', ?, ?, ?, ?, ?)", [login, await hashPassword(password), name, email, country, studentId, selectedTrack]);
@@ -193,36 +206,27 @@ async function route(request, response) {
       if (!targetId || (user.role !== "student" && !roleAllowed(user, ["admin", "viewer"]))) return authError(response, 403);
       if (request.method === "GET") {
         const [rows] = await pool.execute("SELECT data FROM profiles WHERE user_id = ?", [targetId]);
-        return sendJson(response, 200, { profile: rows[0]?.data || {} });
+        const profile = rows[0]?.data || {};
+        return sendJson(response, 200, { profile: user.role === "student" && profile.email == null ? { ...profile, email: user.email || "" } : profile });
       }
       if (request.method === "POST") {
         if (user.role !== "student") return authError(response, 403);
         const payload = await body(request);
-        await pool.execute("INSERT INTO profiles (user_id, data) VALUES (?, ?) ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = CURRENT_TIMESTAMP", [targetId, JSON.stringify(payload.profile || {})]);
-        return sendJson(response, 200, { ok: true });
-      }
-    }
-
-    if (url.pathname === "/api/messages") {
-      const messagePayload = request.method === "POST" ? await body(request) : null;
-      const targetId = user.role === "student" ? user.id : Number(url.searchParams.get("studentId") || messagePayload?.studentId || 0);
-      if (!targetId || (user.role !== "student" && !roleAllowed(user, ["admin", "viewer"]))) return authError(response, 403);
-      if (request.method === "GET") {
-        const [messages] = await pool.execute("SELECT m.id, m.sender_id, m.recipient_id, m.body, m.read_at, m.created_at, su.role AS sender_role, su.full_name AS sender_name FROM messages m JOIN users su ON su.id = m.sender_id WHERE (m.sender_id = ? AND m.recipient_id IN (SELECT id FROM users WHERE role = 'admin')) OR (m.recipient_id = ? AND m.sender_id IN (SELECT id FROM users WHERE role = 'admin')) ORDER BY m.created_at ASC", [targetId, targetId]);
-        return sendJson(response, 200, { messages });
-      }
-      if (request.method === "POST") {
-        if (user.role === "viewer") return authError(response, 403);
-        const message = String(messagePayload?.message || "").trim();
-        if (!message) return sendJson(response, 400, { error: "Введите сообщение" });
-        let recipientId = targetId;
-        if (user.role === "student") {
-          const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1");
-          recipientId = admins[0]?.id;
+        const profile = payload.profile || {};
+        if (typeof profile !== "object" || Array.isArray(profile)) return sendJson(response, 400, { error: "Некорректная анкета" });
+        if (profile.email != null) {
+          profile.email = String(profile.email).trim();
+          if (profile.email && !validEmail(profile.email)) return sendJson(response, 400, { error: "Укажите корректный email" });
         }
-        if (!recipientId) return sendJson(response, 400, { error: "Получатель не найден" });
-        await pool.execute("INSERT INTO messages (sender_id, recipient_id, body) VALUES (?, ?, ?)", [user.id, recipientId, message]);
-        return sendJson(response, 201, { ok: true });
+        const connection = await pool.getConnection();
+        try {
+          await connection.beginTransaction();
+          await connection.execute("INSERT INTO profiles (user_id, data) VALUES (?, ?) ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = CURRENT_TIMESTAMP", [targetId, JSON.stringify(profile)]);
+          if (profile.email != null) await connection.execute("UPDATE users SET email=? WHERE id=?", [profile.email || null, targetId]);
+          await connection.commit();
+        } catch (error) { await connection.rollback(); throw error; }
+        finally { connection.release(); }
+        return sendJson(response, 200, { ok: true });
       }
     }
 
@@ -235,4 +239,10 @@ async function route(request, response) {
 }
 
 await initDatabase();
+await initPaymentDocuments(pool);
+await initMigrationDocuments(pool);
+await initServicesDocuments(pool);
+await initMedicalDocuments(pool);
+await initMessageNotifications(pool);
+startNotificationWorker(pool, notificationMailer);
 http.createServer((request, response) => route(request, response)).listen(port, "0.0.0.0", () => console.log(`API listening on http://0.0.0.0:${port}`));
